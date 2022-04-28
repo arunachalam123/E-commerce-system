@@ -1,0 +1,330 @@
+Create the app.py and dbsetup.py files, and then the static and templates folders.
+
+Building the backend
+In the dbsetup.py file, we will write all the code that is needed for creating a database and interacting with it.
+
+import sqlite3, json
+from sqlite3 import Error
+  
+def create_connection(database):
+try:
+conn = sqlite3.connect(database, isolation_level=None, check_same_thread = False)
+conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+  
+return conn
+except Error as e:
+print(e)
+  
+def create_table(c):
+sql = """
+CREATE TABLE IF NOT EXISTS items (
+id integer PRIMARY KEY,
+name varchar(225) NOT NULL,
+votes integer NOT NULL Default 0
+);
+"""
+c.execute(sql)
+  
+def create_item(c, item):
+sql = ''' INSERT INTO items(name)
+VALUES (?) '''
+c.execute(sql, item)
+  
+def update_item(c, item):
+sql = ''' UPDATE items
+SET votes = votes+1
+WHERE name = ? '''
+c.execute(sql, item)
+  
+def select_all_items(c, name):
+sql = ''' SELECT * FROM items '''
+c.execute(sql)
+  
+rows = c.fetchall()
+rows.append({'name' : name})
+return json.dumps(rows)
+  
+def main():
+database = "./pythonsqlite.db"
+conn = create_connection(database)
+create_table(conn)
+create_item(conn, ["Go"])
+create_item(conn, ["Python"])
+create_item(conn, ["PHP"])
+create_item(conn, ["Ruby"])
+print("Connection established!")
+  
+if __name__ == '__main__':
+main()
+Next, running the dbsetup.py file so that it creates a new SQLite database for us:
+
+$ python dbsetup.py
+We should see this text logged to the terminal — ‘Connection established!’ — and there should be a new file — pythonsqlite.db — added to the project’s root directory.
+
+Next, let’s open up the app.py file and start writing the backend code that will handle incoming requests. Here, we are going to register three routes: the first two will handle the GET requests that return the home and admin pages respectively. The last route will handle the POST requests that attempt to update the status of a particular vote member, both on the user’s page and on the admin’s page.
+
+In this file, we will instantiate a fresh instance of Pusher and use it to broadcast data through a channel that we will shortly define within the application. We will also import some of the database handling methods we defined in dbsetup.py so that we can use them here.
+
+from flask import Flask, render_template, request, jsonify, make_response
+from dbsetup import create_connection, select_all_items, update_item
+from flask_cors import CORS, cross_origin
+from pusher import Pusher
+import simplejson
+  
+app = Flask(__name__)
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
+  
+# configure pusher object
+pusher = Pusher(
+app_id='PUSHER_APP_ID',
+key='PUSHER_APP_KEY',
+secret='PUSHER_APP_SECRET',
+cluster='PUSHER_APP_CLUSTER',
+ssl=True)
+  
+database = "./pythonsqlite.db"
+conn = create_connection(database)
+c = conn.cursor()
+  
+def main():
+global conn, c
+  
+@app.route('/')
+def index():
+return render_template('index.html')
+  
+@app.route('/admin')
+def admin():
+return render_template('admin.html')
+  
+@app.route('/vote', methods=['POST'])
+def vote():
+data = simplejson.loads(request.data)
+update_item(c, [data['member']])
+output = select_all_items(c, [data['member']])
+pusher.trigger(u'poll', u'vote', output)
+return request.data
+  
+if __name__ == '__main__':
+main()
+app.run(debug=True)
+First, we imported the required modules and objects, then we initialized a Flask app. Next, we ensured that the backend server can receive requests from a client on another computer, then we initialized and configured Pusher. We also registered some routes and defined the functions that will handle them.
+
+Replace the PUSHER_APP_* keys with the values on your Pusher dashboard.
+
+With the pusher object instantiated, we can trigger events on whatever channels we define.
+In the /vote route, we trigger a ‘vote’ event on the ‘poll’ channel. The trigger method has the following syntax:
+
+pusher.trigger("a_channel", "an_event", {key: "data to pass with event"})
+You can find the docs for the Pusher Python library here, to get more information on configuring and using Pusher in Python.
+
+The first two routes we defined will return our application’s view by rendering the index.html and admin.html templates. However, we are yet to create these files so there is nothing to render, let’s create the app view in the next step and start using the frontend to communicate with our Python backend API.
+
+Setting up the app view
+We need to create two files in the templates directory. These files will be named index.html and admin.html, this is where the view for our code will live. The index page will render the view that displays the voting page for users to interact with while the admin page will display the chart that will update in realtime when a new vote is cast.
+
+In the ./templates/index.html file,
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Python Poll</title>
+<link rel="stylesheet" type="text/css" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css">
+<style type="text/css">
+.poll-member h1 {
+cursor: pointer
+}
+.percentageBarParent{
+height: 22px;
+width: 100%;
+border: 1px solid black;
+}
+.percentageBar {
+height: 20px;
+width: 0%;
+}
+</style>
+</head>
+<body>
+<div class="main">
+<div class="container">
+<h1>What's your preferred language?</h1>
+<div class="col-md-12">
+<div class="row">
+<div class="col-md-6">
+<div class="poll-member Go">
+<h1>Go&nbsp;&nbsp;</h1>
+<div class="percentageBarParent">
+<div class="percentageBar" id="Go"></div>
+</div>
+</div>
+</div>
+<div class="col-md-6">
+<div class="poll-member ">
+<h1>Python&nbsp;&nbsp;</h1>
+<div class="percentageBarParent">
+<div class="percentageBar" id="Python"></div>
+</div>
+</div>
+</div>
+</div>
+<div class="row">
+<div class="col-md-6">
+<div class="poll-member PHP">
+<h1>PHP&nbsp;&nbsp;</h1>
+<div class="percentageBarParent">
+<div class="percentageBar" id="PHP"></div>
+</div>
+</div>
+</div>
+<div class="col-md-6">
+<div class="poll-member Ruby">
+<h1>Ruby&nbsp;&nbsp;</h1>
+<div class="percentageBarParent">
+<div class="percentageBar" id="Ruby"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+  
+<script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.16.2/axios.js"></script>
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script type="text/javascript" src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
+<script src="https://js.pusher.com/4.0/pusher.min.js"></script>
+<script type="text/javascript" src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
+Next, let’s copy and paste in this code into the ./templates/admin.html file:
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Python Poll Admin</title>
+<link rel="stylesheet" type="text/css" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css">
+</head>
+<body>
+  
+<div class="main">
+<div class="container">
+<h1>Chart</h1>
+<div id="chartContainer" style="height: 300px; width: 100%;"></div>
+</div>
+</div>
+  
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
+<script src="https://js.pusher.com/4.0/pusher.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/canvasjs/1.7.0/canvasjs.js"></script>
+<script src="{{ url_for('static', filename='admin.js') }}" defer></script>
+</body>
+</html>
+That’s all for the index.html and admin.html files, we have described how they should be rendered on the DOM but our application lacks all forms of interactivity.
+
+In the next section, we will write the scripts that will send the POST requests to our Python backend server.
+
+Communicating with the backend
+Create two more files in the static folder, one for the index page and the other for the admin page. These files are the scripts that will define how our application interacts with click events, communicates with the backend server for realtime updates and display a progress bar.
+
+Let’s create the following files in the static folder:
+
+app.js
+admin.js
+In the ./static/app.js file, we can paste the following:
+
+var pollMembers = document.querySelectorAll('.poll-member')
+  
+var members = ['Go', 'Python', 'PHP', 'Ruby']
+  
+// Sets up click events for all the cards on the DOM
+pollMembers.forEach((pollMember, index) => {
+pollMember.addEventListener('click', (event) => {
+handlePoll(members[index])
+}, true)
+})
+  
+// Sends a POST request to the server using axios
+var handlePoll = function(member) {
+axios.post('http://localhost:5000/vote', {member}).then((r) => console.log(r))
+}
+  
+// Configure Pusher instance
+const pusher = new Pusher('PUSHER_APP_KEY', {
+cluster: 'PUSHER_APP_CLUSTER',
+encrypted: true
+});
+  
+// Subscribe to poll trigger
+var channel = pusher.subscribe('poll');
+  
+// Listen to vote event
+channel.bind('vote', function(data) {
+for (i = 0; i < (data.length - 1); i++) {
+var total = data[0].votes + data[1].votes + data[2].votes + data[3].votes
+document.getElementById(data[i].name).style.width = calculatePercentage(total, data[i].votes)
+document.getElementById(data[i].name).style.background = "#388e3c"
+}
+});
+  
+let calculatePercentage = function(total, amount) {
+return (amount / total) * 100 + "%"
+}
+Replace the PUSHER_APP_* keys with the keys on your Pusher dashboard.
+
+First, we registered click events on all the members of the poll, then we configure Axios to send a POST request whenever a user votes for a member of the poll. Next, we configured a Pusher instance to communicate with the Pusher service. Next, we register a listener for the events Pusher sends. Finally, we bind the events we are listening to on the channel we created.
+
+Next, open the admin.js file
+
+var dataPoints = [
+{ label: "Go", y: 0 },
+{ label: "Python", y: 0 },
+{ label: "PHP", y: 0 },
+{ label: "Ruby", y: 0 },
+]
+  
+var chartContainer = document.querySelector('#chartContainer');
+  
+if (chartContainer) {
+var chart = new CanvasJS.Chart("chartContainer", {
+animationEnabled: true,
+theme: "theme2",
+data: [
+{
+type: "column",
+dataPoints: dataPoints
+}
+]
+});
+  
+chart.render();
+}
+  
+Pusher.logToConsole = true;
+  
+// Configure Pusher instance
+const pusher = new Pusher('PUSHER_APP_KEY', {
+cluster: 'PUSHER_APP_CLUSTER',
+encrypted: true
+});
+  
+// Subscribe to poll trigger
+var channel = pusher.subscribe('poll');
+  
+// Listen to vote event
+channel.bind('vote', function(data) {
+dataPoints = dataPoints.map(dataPoint => {
+if(dataPoint.label == data[4].name[0]) {
+dataPoint.y += 10;
+}
+  
+return dataPoint
+});
+  
+// Re-render chart
+chart.render()
+});
